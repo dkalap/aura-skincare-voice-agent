@@ -20,8 +20,6 @@ An interactive, production-grade AI Voice Support Specialist ("Aria") built for 
 * **Voice / Orchestration**: Vapi Web SDK (`@vapi-ai/web`)
 * **Transport Protocol**: WebRTC (low-latency streaming audio)
 * **LLM Engine**: OpenAI GPT-4o
-* * **Deployment**: Vercel
-
 ---
 
 ## 🧠 Architectural & Product Reflection
@@ -41,6 +39,5 @@ Handling asynchronous tool calls without race conditions between Vapi's event li
 * **CRM Webhooks**: Stream post-call JSON summaries directly to Zendesk/Gorgias for auto-ticket creation.
 * **Semantic Caching**: Cache common policy queries (e.g., return rules) using Redis to reduce LLM costs and latency.
 * **Human Handoff**: Auto-transfer calls to live support agents (via Twilio/SIP) upon detecting high customer frustration.
-* **Deployment**: Vercel
 
 ---
