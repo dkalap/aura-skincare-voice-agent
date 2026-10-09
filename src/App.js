@@ -1,29 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import Vapi from '@vapi-ai/web';
 
-
-const VAPI_PUBLIC_KEY = '23b51064-4037-48ff-8f83-7ed5f460d595';
-const ASSISTANT_ID = 'c93f7d14-0183-4e7a-b278-5956dbba4076';
+const VAPI_PUBLIC_KEY = process.env.REACT_APP_VAPI_PUBLIC_KEY;
+const ASSISTANT_ID = process.env.REACT_APP_VAPI_ASSISTANT_ID;
 
 const vapi = new Vapi(VAPI_PUBLIC_KEY);
 
-// Expanded Mock Database
 const INITIAL_ORDERS = {
-  'ORD-101': {
+  '101': {
+    display_id: 'Order 101',
     customer: 'Priya Sharma',
     product: 'Vitamin C Serum (30ml)',
     value: '₹699',
     status: 'Out for Delivery',
     notes: 'BlueDart — BD-982103. Expected by 6 PM today.'
   },
-  'ORD-102': {
+  '102': {
+    display_id: 'Order 102',
     customer: 'Rahul Verma',
     product: 'Hydrating Sunscreen SPF 50',
     value: '₹499',
     status: 'Delivered',
     notes: 'Delivered 14 days ago. Return window closed.'
   },
-  'ORD-103': {
+  '103': {
+    display_id: 'Order 103',
     customer: 'Ananya Patel',
     product: 'Green Tea Face Wash + Toner',
     value: '₹850',
@@ -34,12 +35,14 @@ const INITIAL_ORDERS = {
 
 export default function App() {
   const [orders, setOrders] = useState(INITIAL_ORDERS);
-  const [callStatus, setCallStatus] = useState('Idle'); // Idle, Active, Speaking, Thinking
+  const [callStatus, setCallStatus] = useState('Idle');
   const [transcripts, setTranscripts] = useState([]);
   const [summary, setSummary] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
 
   useEffect(() => {
+    vapi.removeAllListeners();
+
     vapi.on('call-start', () => setCallStatus('Active'));
     vapi.on('call-end', () => {
       setCallStatus('Idle');
@@ -50,63 +53,142 @@ export default function App() {
     vapi.on('speech-end', () => setCallStatus('Active'));
 
     vapi.on('message', (message) => {
+      // 1. Handle Transcripts
       if (message.type === 'transcript') {
+        const role = message.role;
+        const text = message.transcript || '';
+
         setTranscripts((prev) => [
           ...prev,
-          { role: message.role, text: message.transcript }
-        ]);
+          { role: role, text: text }
+        ].slice(-20));
+
+        // Direct transcript interception when user speaks
+        if (role === 'user' && message.transcriptType === 'final') {
+          handleDirectTranscriptLookup(text.toLowerCase());
+        }
       }
 
-      // Handle Multiple Function Calls
-      if (message.type === 'tool-calls') {
+      // 2. Handle Standard Vapi Tool Calls (If Vapi sends them)
+      if (message.type === 'tool-calls' || message.type === 'function-call') {
         setCallStatus('Thinking');
-        for (const call of message.toolWithToolCallList) {
-          const fnName = call.toolCall.function.name;
-          const args = JSON.parse(call.toolCall.function.arguments || '{}');
+        const toolCalls = message.toolWithToolCallList || [message];
 
-          let resultText = '';
+        for (const call of toolCalls) {
+          const fnName = call.toolCall?.function?.name || call.functionCall?.name;
+          const rawArgs = call.toolCall?.function?.arguments || call.functionCall?.parameters || {};
+          const args = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
 
-          if (fnName === 'get_order_details') {
-            const order = orders[args.order_id];
-            resultText = order ? JSON.stringify(order) : `Order ${args.order_id} not found.`;
-          } else if (fnName === 'cancel_order') {
-            const order = orders[args.order_id];
-            if (!order) {
-              resultText = `Order ${args.order_id} not found.`;
-            } else if (order.status === 'Processing') {
-              setOrders((prev) => ({
-                ...prev,
-                [args.order_id]: { ...prev[args.order_id], status: 'Cancelled' }
-              }));
-              resultText = `Order ${args.order_id} successfully cancelled. Refund initiated to original payment method.`;
-            } else {
-              resultText = `Cannot cancel order ${args.order_id}. Current status is '${order.status}'. Cancellations are only allowed when status is 'Processing'.`;
-            }
+          const rawInput = String(args.order_id || args.orderId || '');
+          const responseText = processOrderLogic(fnName, rawInput);
+
+          const callId = call.toolCall?.id || call.callId;
+          if (callId) {
+            vapi.send({
+              type: 'tool-call-result',
+              toolCallId: callId,
+              result: responseText
+            });
           }
-
-          vapi.send({
-            type: 'tool-call-result',
-            toolCallId: call.toolCall.id,
-            result: resultText
-          });
         }
       }
     });
 
     return () => vapi.removeAllListeners();
-  }, [orders, transcripts]);
+  }, [orders]);
+
+  // Core Order Logic Handler
+  const processOrderLogic = (action, input) => {
+    const extractedDigits = String(input).replace(/\D/g, '');
+    const targetKey = Object.keys(orders).find(
+      (k) => k === String(input).trim() || k === extractedDigits
+    ) || extractedDigits;
+
+    const order = orders[targetKey];
+
+    if (action === 'get_order_details' || action === 'lookup') {
+      if (order) {
+        return `Order ${order.display_id} belongs to ${order.customer}. Status is ${order.status}. Product is ${order.product}. Details: ${order.notes}`;
+      }
+      return `Order ${input} was not found in our database. Valid order IDs are 101, 102, and 103.`;
+    }
+
+    if (action === 'cancel_order' || action === 'cancel') {
+      if (!order) {
+        return `Order ${input} was not found.`;
+      }
+      if (order.status === 'Processing') {
+        setOrders((prev) => ({
+          ...prev,
+          [targetKey]: { ...prev[targetKey], status: 'Cancelled' }
+        }));
+        return `Order ${order.display_id} has been successfully cancelled. Refund initiated to original payment method.`;
+      }
+      return `Cannot cancel ${order.display_id} because its current status is ${order.status}.`;
+    }
+
+    return `Order ${input} processed.`;
+  };
+
+  // Direct Speech Backup Interceptor
+  const handleDirectTranscriptLookup = (userText) => {
+    const digitMatch = userText.match(/\b(101|102|103)\b/);
+    if (!digitMatch) return;
+
+    const orderId = digitMatch[0];
+
+    if (userText.includes('cancel')) {
+      const response = processOrderLogic('cancel', orderId);
+      vapi.send({
+        type: 'add-message',
+        message: { role: 'system', content: response }
+      });
+    } else if (userText.includes('order') || userText.includes('status') || userText.includes('details') || userText.includes('check') || userText.includes('101') || userText.includes('102') || userText.includes('103')) {
+      const response = processOrderLogic('lookup', orderId);
+      vapi.send({
+        type: 'add-message',
+        message: { role: 'system', content: response }
+      });
+    }
+  };
 
   const generateCallSummary = () => {
-    const fullText = transcripts.map((t) => t.text).join(' ');
-    const foundOrder = fullText.match(/ORD-\d+/i)?.[0]?.toUpperCase() || 'N/A';
-    
-    setSummary({
-      customer_intent: fullText.toLowerCase().includes('cancel') ? 'ORDER_CANCELLATION' : 'ORDER_STATUS_ENQUIRY',
-      order_id: foundOrder,
-      resolution_status: transcripts.length > 2 ? 'RESOLVED' : 'INCOMPLETE',
-      call_summary: transcripts.length > 0
-        ? `Interaction complete regarding ${foundOrder}. Voice agent processed user queries in real-time.`
-        : 'Call disconnected before interaction.'
+    setTranscripts((currentTranscripts) => {
+      const fullText = currentTranscripts.map((t) => t.text).join(' ').toLowerCase();
+
+      const numMatch = fullText.match(/\b(101|102|103|1|2|3)\b/i);
+      const matchedNum = numMatch ? numMatch[0] : null;
+      let extractedOrder = 'N/A';
+      if (matchedNum === '101' || matchedNum === '1') extractedOrder = 'Order 101';
+      if (matchedNum === '102' || matchedNum === '2') extractedOrder = 'Order 102';
+      if (matchedNum === '103' || matchedNum === '3') extractedOrder = 'Order 103';
+
+      let intent = 'GENERAL_BRAND_INQUIRY';
+      if (fullText.includes('cancel')) {
+        intent = 'ORDER_CANCELLATION';
+      } else if (fullText.includes('return') || fullText.includes('refund') || fullText.includes('unopened') || fullText.includes('policy')) {
+        intent = 'POLICY_AND_RETURNS_INQUIRY';
+      } else if (extractedOrder !== 'N/A' || fullText.includes('order') || fullText.includes('status')) {
+        intent = 'ORDER_STATUS_ENQUIRY';
+      }
+
+      const topicsDiscussed = [];
+      if (fullText.includes('return') || fullText.includes('policy')) topicsDiscussed.push('return policies');
+      if (fullText.includes('cod') || fullText.includes('delivery') || fullText.includes('shipping')) topicsDiscussed.push('shipping/COD options');
+      if (extractedOrder !== 'N/A') topicsDiscussed.push(`${extractedOrder}`);
+
+      const summaryText = topicsDiscussed.length > 0
+        ? `Customer inquired about ${topicsDiscussed.join(', ')}. Assistant provided answers according to brand guidelines.`
+        : 'Customer engaged in general conversation with support agent.';
+
+      setSummary({
+        customer_intent: intent,
+        order_id: extractedOrder,
+        resolution_status: currentTranscripts.length > 2 ? 'RESOLVED' : 'INCOMPLETE',
+        call_summary: summaryText
+      });
+
+      return currentTranscripts;
     });
   };
 
@@ -134,7 +216,6 @@ export default function App() {
       </header>
 
       <div style={styles.grid}>
-        {/* Left Column: Voice Controls & Transcripts */}
         <div style={styles.card}>
           <div style={styles.statusHeader}>
             <span style={styles.statusLabel}>Agent Status:</span>
@@ -163,7 +244,7 @@ export default function App() {
           <div style={styles.transcriptBox}>
             <h3 style={styles.sectionTitle}>Live Call Transcript</h3>
             {transcripts.length === 0 && (
-              <p style={styles.placeholderText}>Click 'Start Support Call' and ask about your order or brand policies...</p>
+              <p style={styles.placeholderText}>Click 'Start Support Call' and ask about order 101, 102, or 103...</p>
             )}
             {transcripts.map((t, index) => (
               <div key={index} style={t.role === 'user' ? styles.userBubble : styles.agentBubble}>
@@ -173,14 +254,13 @@ export default function App() {
           </div>
         </div>
 
-        {/* Right Column: Database Helper & Summary */}
         <div style={styles.card}>
           <h3 style={styles.sectionTitle}>📦 Customer Orders Database</h3>
           <div style={styles.ordersList}>
             {Object.entries(orders).map(([id, details]) => (
               <div key={id} style={styles.orderCard}>
                 <div style={styles.orderHeader}>
-                  <strong>{id}</strong> — {details.customer}
+                  <strong>{details.display_id}</strong> — {details.customer}
                   <span style={{ ...styles.statusBadge, backgroundColor: getOrderStatusColor(details.status) }}>
                     {details.status}
                   </span>
@@ -203,7 +283,6 @@ export default function App() {
   );
 }
 
-// Helpers
 const getStatusColor = (status) => {
   switch (status) {
     case 'Speaking': return '#10B981';
@@ -223,7 +302,6 @@ const getOrderStatusColor = (status) => {
   }
 };
 
-// Styles object for quick, clean inline styling
 const styles = {
   container: { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', maxWidth: '1100px', margin: '0 auto', padding: '24px', backgroundColor: '#F8FAFC', minHeight: '100vh' },
   header: { marginBottom: '24px', textAlign: 'center' },
