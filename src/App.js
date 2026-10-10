@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import Vapi from '@vapi-ai/web';
 
-const VAPI_PUBLIC_KEY = process.env.REACT_APP_VAPI_PUBLIC_KEY;
-const ASSISTANT_ID = process.env.REACT_APP_VAPI_ASSISTANT_ID;
+const VAPI_PUBLIC_KEY = (process.env.REACT_APP_VAPI_PUBLIC_KEY || '').trim();
+const ASSISTANT_ID = (process.env.REACT_APP_VAPI_ASSISTANT_ID || '').trim();
 
 const vapi = new Vapi(VAPI_PUBLIC_KEY);
 
