@@ -95,6 +95,7 @@ export default function App() {
     });
 
     return () => vapi.removeAllListeners();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders]);
 
   // Core Order Logic Handler
